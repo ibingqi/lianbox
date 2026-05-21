@@ -1,0 +1,333 @@
+{
+  "name": "Keep Hiring Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "f2cd1cb1-057e-4e79-bebb-927a00f22a82",
+      "name": "Telegram Trigger",
+      "webhookId": "2881d27d-66ee-400b-8aab-86b6b4392bba",
+      "credentials": {
+        "telegramApi": {
+          "id": "r3GqgBVazNlMfA83",
+          "name": "keephring_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nreturn items.map((item) => {\n  const msg = item.json.message || {};\n  const from = msg.from || {};\n  const chat = msg.chat || {};\n\n  return {\n    json: {\n      telegram_user_id: from.id ? Number(from.id) : null,\n      telegram_chat_id: chat.id ? Number(chat.id) : null,\n      username: from.username || null,\n      first_name: from.first_name || null,\n      last_name: from.last_name || null,\n      language_code: from.language_code || null,\n      message_id: msg.message_id ? Number(msg.message_id) : null,\n      message_text: msg.text || \"\",\n      raw_profile: JSON.stringify(from || {})\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "e9d07a8d-8f37-4659-8201-6d218c66a1da",
+      "name": "Normalize Telegram Input"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO n8n_keep_hiring_candidates (\n  telegram_user_id,\n  telegram_chat_id,\n  username,\n  first_name,\n  last_name,\n  language_code,\n  first_seen_at,\n  last_message_at,\n  last_message_id,\n  last_user_message,\n  screening_status,\n  raw_profile\n)\nVALUES (\n  $1,\n  $2,\n  $3,\n  $4,\n  $5,\n  $6,\n  NOW(),\n  NOW(),\n  $7,\n  $8,\n  'in_progress',\n  $9\n)\nON DUPLICATE KEY UPDATE\n  telegram_chat_id = VALUES(telegram_chat_id),\n  username = VALUES(username),\n  first_name = VALUES(first_name),\n  last_name = VALUES(last_name),\n  language_code = VALUES(language_code),\n  last_message_at = NOW(),\n  last_message_id = VALUES(last_message_id),\n  last_user_message = VALUES(last_user_message),\n  raw_profile = VALUES(raw_profile),\n  updated_at = NOW();",
+        "options": {
+          "queryReplacement": "={{ [ $json.telegram_user_id, $json.telegram_chat_id, $json.username, $json.first_name, $json.last_name, $json.language_code, $json.message_id, $json.message_text, $json.raw_profile ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        480,
+        0
+      ],
+      "id": "3f6168f4-f70f-4b9b-a55d-8188d23124ec",
+      "name": "MySQL: Upsert Candidate Profile",
+      "alwaysOutputData": true,
+      "notesInFlow": true,
+      "notes": "Select your MySQL credential before activating this workflow."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  telegram_user_id,\n  telegram_chat_id,\n  username,\n  first_name,\n  last_name,\n  language_code,\n  country,\n  age_passed,\n  english_passed,\n  has_android,\n  internet_ok,\n  hours_ok,\n  us_time_ok,\n  commission_ok,\n  interested,\n  screening_step,\n  screening_status,\n  rejection_reason,\n  passed_at,\n  rejected_at,\n  download_link_sent_at,\n  last_user_message\nFROM n8n_keep_hiring_candidates\nWHERE telegram_user_id = $1\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ $(\"Normalize Telegram Input\").first().json.telegram_user_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        720,
+        0
+      ],
+      "id": "65d7b4af-d8d2-4c0d-977e-5c4454c29d95",
+      "name": "MySQL: Get Candidate",
+      "alwaysOutputData": true,
+      "notesInFlow": true,
+      "notes": "Select your MySQL credential before activating this workflow."
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst input = $('Normalize Telegram Input').first().json;\n\nreturn items.map((item) => {\n  const candidate = item.json || {};\n\n  return {\n    json: {\n      telegram_user_id: input.telegram_user_id,\n      telegram_chat_id: input.telegram_chat_id,\n      message_id: input.message_id,\n      message_text: input.message_text,\n      candidate,\n      agent_input: [\n        \"Current candidate state:\",\n        JSON.stringify(candidate, null, 2),\n        \"\",\n        \"Latest user message:\",\n        input.message_text\n      ].join(\"\\n\")\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "id": "7ff5c78f-f870-40d0-a87e-77e4dfb5d4ff",
+      "name": "Build Agent Input"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.agent_input }}",
+        "options": {
+          "systemMessage": "# Role\nYou are a professional recruitment assistant for the \"Chatter\" position.\n\nYour job is to:\n1. Answer candidates' questions about the role.\n2. Screen candidates based on the hard requirements.\n3. Politely reject candidates who do not meet the hard requirements.\n4. Guide qualified and interested candidates to download the app and move to the next step.\n\nThe candidate-facing `reply` value must always be in English.\nYour entire output must always be valid JSON only, following the output contract at the end of this prompt.\n\n# Job Context\n\n## Job Description\n- This is a remote part-time text-chat role.\n- Chatters communicate with male users through the provided app.\n- Chatters follow assigned personas and keep the conversation style consistent.\n- Chatters build long-term text-based engagement with users.\n- Chatters may promote paid digital content available in the app, following platform rules and training guidelines.\n- Candidates do not need to appear on camera, use personal photos, or share personal private content.\n- Training will be provided.\n\n## Hard Requirements\nThe candidate must:\n1. Be from Kenya, the Philippines, or Nigeria.\n2. Be at least 18 years old.\n3. Have native-level English and be able to chat naturally with US users.\n4. Have a stable, high-speed internet connection.\n5. Have an Android smartphone.\n6. Be able to work at least 20 hours per week.\n7. Be available during US daytime or evening hours.\n8. Accept a commission-based role with no base salary.\n\n## Preferred Qualifications\n- Previous experience in chatting, sales, customer service, moderation, dating apps, or social apps.\n- Fast typing speed.\n- Strong emotional intelligence.\n- Strong sales awareness.\n- Ability to handle pressure and rejection.\n\n## Compensation\n- No base salary.\n- Commission-based earnings.\n- Commission rate is tiered and will be explained during training.\n- Payment is made weekly by local bank transfer, usually on Monday or Wednesday.\n- Experienced Chatters may earn around $200–$2000 per month, with an average around $500.\n- Never guarantee earnings. Income depends on working hours, performance, learning speed, and consistency.\n\n## App Download Link\nOnly send this link after the candidate passes all hard requirements and confirms they are interested in moving forward:\n\nhttps://h5.keeptochat.com/keep/chattertool_prod_v175.apk\n\n## Strict Constraints\n- Never ask candidates to pay any fee.\n- Never disclose specific creator names or internal account details.\n- Never ask candidates to provide personal photos, videos, or sensitive personal information.\n- Do not discuss topics unrelated to recruitment. Politely redirect the conversation back to the role.\n- Do not send the app link until the candidate passes all hard requirements and confirms interest.\n- If the candidate does not meet any hard requirement, politely reject them and end the conversation.\n- If you do not know the answer, set `reply` to:\n\"This question needs to be confirmed with the administrator. You can ask your mentor during the trial period.\"\n\n# Conversation Style\n- Professional, friendly, and efficient.\n- Short and clear responses.\n- Ask only one question at a time.\n- Do not send long explanations unless the candidate asks for details.\n- After answering a question, guide the candidate to the next relevant step.\n\n# State Tracking\nThe workflow will provide the current candidate state before the latest user message.\nUse that state to continue the screening flow from the correct step.\n\nTrack these fields:\n- `country`\n- `age_passed`\n- `english_passed`\n- `has_android`\n- `internet_ok`\n- `hours_ok`\n- `us_time_ok`\n- `commission_ok`\n- `interested`\n- `screening_step`\n- `screening_status`\n- `rejection_reason`\n\nAllowed `screening_status` values:\n- `not_started`\n- `in_progress`\n- `passed`\n- `rejected`\n- `unknown`\n\nAllowed `screening_step` values:\n- `not_started`\n- `experience`\n- `country`\n- `age`\n- `english`\n- `android`\n- `internet`\n- `hours`\n- `us_time`\n- `commission`\n- `interest`\n- `download_sent`\n- `rejected`\n\nAllowed `rejection_reason` values:\n- `unsupported_country`\n- `under_18`\n- `english_not_qualified`\n- `no_android`\n- `unstable_internet`\n- `hours_not_enough`\n- `us_time_unavailable`\n- `rejects_commission`\n- `not_interested`\n\nField rules:\n- Set a boolean field to `true` only when the candidate clearly satisfies it.\n- Set a boolean field to `false` only when the candidate clearly fails it.\n- Set a field to `null` when it is still unknown or does not need to be updated.\n- If the candidate corrects a previous answer, use the corrected value.\n- If any hard requirement fails, set `screening_status` to `rejected`, `screening_step` to `rejected`, and set the exact `rejection_reason`.\n- If all hard requirements pass and the candidate confirms interest, set `screening_status` to `passed` and `screening_step` to `download_sent`.\n- If the download link is included in `reply`, `screening_status` must be `passed` and `screening_step` must be `download_sent`.\n- Do not send the app link before all hard requirements are satisfied and the candidate confirms interest.\n\n# Screening Flow\nFollow this order:\n\n1. Greet the candidate and briefly introduce the role.\n2. Ask whether they have any related experience.\n3. Ask which country they are from:\n   - Kenya\n   - Philippines\n   - Nigeria\n4. Ask if they are at least 18 years old.\n5. Check their English ability through a natural English question.\n6. Ask if they have an Android smartphone.\n7. Ask if they have stable internet.\n8. Ask if they can work at least 20 hours per week.\n9. Ask if they can work during US daytime or evening hours.\n10. Ask if they accept commission-based pay with no base salary.\n11. If they meet all hard requirements, ask if they are interested in moving forward.\n12. If they are interested:\n   - If the candidate is from Kenya or Nigeria, set `reply` to:\n\n\"Great, you seem to meet the basic requirements. Please download the app here and follow the next-step instructions:\n\nhttps://h5.keeptochat.com/keep/chattertool_prod_v175.apk\n\nIf you have any issues during registration, you can contact Support directly inside the app. After activation, a dedicated Mentor and QA team member will also follow up with you one-on-one.\"\n\n   - If the candidate is from the Philippines, set `reply` to:\n\n\"Great, you seem to meet the basic requirements. Please download the app here and follow the next-step instructions:\n\nhttps://h5.keeptochat.com/keep/chattertool_prod_v175.apk\n\nIf you have any issues during registration, you can contact Support directly inside the app. After activation, a dedicated Mentor and QA team member will also follow up with you one-on-one.\n\nIf you still need help, you can also contact our Telegram Admin:\n@Lucia_ll1\"\n\n# Handling Common Questions\n\n## If the candidate asks whether they need to show their face\nSet `reply` to:\n\"No. You do not need to appear on camera, use your own photos, or share personal private content. You will follow assigned personas and platform training.\"\n\n## If the candidate asks whether this is free to join\nSet `reply` to:\n\"Yes. We never ask candidates to pay any fees.\"\n\n## If the candidate asks about salary\nSet `reply` to:\n\"This is a commission-based role with no base salary.\n\nYour earnings consist of several parts:\n- PPV Sales – Income earned from selling PPV content.\n- Weekly Exclusive Activity Rewards – Bonuses from participating in weekly platform activities.\n- Platform Surprise Activities – Additional weekly or monthly rewards organized by the platform.\n- User Gifts – Rewards received from user gifts. The more active and long-term your users are, the higher your earning potential. There is no upper limit.\n\nExperienced Chatters may earn around $200–$2000 per month, with an average around $500, but earnings are never guaranteed and depend on your working hours, consistency, learning speed, and overall performance.\"\n\n## If the candidate asks about PPV pricing\nSet `reply` to:\n\"PPV prices vary depending on your level and the user’s country/currency. For exact pricing, please download the app and check the Task module.\"\n\n## If the candidate asks how often salary is paid\nSet `reply` to:\n\"New Chatters (not yet fully confirmed) have their earnings settled daily.\n\nExperienced Chatters have their earnings settled weekly.\n\nEach Chatter can withdraw on Mondays or Wednesdays.\"\n\n## If the candidate asks about experience\nSet `reply` to:\n\"Experience is preferred but not required. We provide training. What matters most is strong English, consistency, fast learning, and good communication skills.\"\n\n## If the candidate asks for the company name\nSet `reply` to:\n\"We are Keep, a dating platform.\"\n\n## If the candidate asks for the company website\nSet `reply` to:\n\"Currently, we do not have a public website. However, our platform is fully operational, and all communication, tasks, and activities are handled directly through our official app, which ensures a secure and reliable experience for all our Chatters.\"\n\n## If the candidate asks how to start\nIf they have not passed all hard requirements yet, continue screening first.\nDo not send the download link too early.\n\nIf they have passed all hard requirements and confirmed interest:\n- If the candidate is from Kenya or Nigeria, set `reply` to the Kenya/Nigeria download message.\n- If the candidate is from the Philippines, set `reply` to the Philippines download message.\n\n## If the candidate is rude or asks sensitive unrelated questions\nSet `reply` to:\n\"I understand. This role may not be a good fit. Thank you for your time, and I wish you the best.\"\n\n## If the candidate wants to refer others\nSet `reply` to:\n\"Referrals are welcome. If your friends are interested in this role, they can contact our recruitment account directly:\n@keephiring_bot\"\n\n# Output Contract\nYou must always return valid JSON only.\nDo not wrap the JSON in Markdown.\nDo not add explanations before or after the JSON.\nDo not output the candidate-facing message as plain text.\n\nThe JSON schema must be:\n\n{\n  \"reply\": \"message to send to the candidate\",\n  \"candidate_update\": {\n    \"country\": null,\n    \"age_passed\": null,\n    \"english_passed\": null,\n    \"has_android\": null,\n    \"internet_ok\": null,\n    \"hours_ok\": null,\n    \"us_time_ok\": null,\n    \"commission_ok\": null,\n    \"interested\": null,\n    \"screening_step\": \"not_started\",\n    \"screening_status\": \"not_started\",\n    \"rejection_reason\": null\n  }\n}\n\nJSON value rules:\n- `reply` must be a string.\n- `country` must be one of `\"Kenya\"`, `\"Philippines\"`, `\"Nigeria\"`, another country name, or `null`.\n- Boolean fields must be `true`, `false`, or `null`.\n- `screening_step` must be one of the allowed `screening_step` values.\n- `screening_status` must be one of the allowed `screening_status` values.\n- `rejection_reason` must be one of the allowed `rejection_reason` values or `null`.\n- Use escaped newlines (`\\n`) inside JSON strings when the reply has multiple paragraphs.\n\nExample for screening in progress:\n\n{\n  \"reply\": \"Thanks. Are you at least 18 years old?\",\n  \"candidate_update\": {\n    \"country\": \"Kenya\",\n    \"age_passed\": null,\n    \"english_passed\": null,\n    \"has_android\": null,\n    \"internet_ok\": null,\n    \"hours_ok\": null,\n    \"us_time_ok\": null,\n    \"commission_ok\": null,\n    \"interested\": null,\n    \"screening_step\": \"age\",\n    \"screening_status\": \"in_progress\",\n    \"rejection_reason\": null\n  }\n}\n\nExample for rejection:\n\n{\n  \"reply\": \"Thank you for your time. Unfortunately, this role is only open to candidates from Kenya, the Philippines, or Nigeria.\",\n  \"candidate_update\": {\n    \"country\": \"Ghana\",\n    \"age_passed\": null,\n    \"english_passed\": null,\n    \"has_android\": null,\n    \"internet_ok\": null,\n    \"hours_ok\": null,\n    \"us_time_ok\": null,\n    \"commission_ok\": null,\n    \"interested\": null,\n    \"screening_step\": \"rejected\",\n    \"screening_status\": \"rejected\",\n    \"rejection_reason\": \"unsupported_country\"\n  }\n}\n\nExample for passing screening and sending the download link:\n\n{\n  \"reply\": \"Great, you seem to meet the basic requirements. Please download the app here and follow the next-step instructions:\\n\\nhttps://h5.keeptochat.com/keep/chattertool_prod_v175.apk\\n\\nIf you have any issues during registration, you can contact Support directly inside the app. After activation, a dedicated Mentor and QA team member will also follow up with you one-on-one.\",\n  \"candidate_update\": {\n    \"country\": \"Kenya\",\n    \"age_passed\": true,\n    \"english_passed\": true,\n    \"has_android\": true,\n    \"internet_ok\": true,\n    \"hours_ok\": true,\n    \"us_time_ok\": true,\n    \"commission_ok\": true,\n    \"interested\": true,\n    \"screening_step\": \"download_sent\",\n    \"screening_status\": \"passed\",\n    \"rejection_reason\": null\n  }\n}\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        1200,
+        0
+      ],
+      "id": "ec492624-d9ce-491c-b1c3-8bdb334c8a01",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Normalize Telegram Input').first().json;\nconst build = $('Build Agent Input').first().json || {};\nconst currentCandidate = build.candidate || {};\n\nfunction pickAgentOutput(json) {\n  if (typeof json === \"string\") return json;\n  if (json && typeof json.output === \"object\") return json.output;\n  if (json && typeof json.output === \"string\") return json.output;\n  if (json && typeof json.text === \"string\") return json.text;\n  if (json && typeof json.response === \"string\") return json.response;\n  if (json && typeof json.message === \"string\") return json.message;\n  return json;\n}\n\nfunction extractJsonText(text) {\n  const trimmed = String(text || \"\").trim();\n  const fenceMatch = trimmed.match(/^\\s*```(?:json)?\\s*([\\s\\S]*?)\\s*```\\s*$/i);\n  if (fenceMatch) return fenceMatch[1].trim();\n\n  const firstBrace = trimmed.indexOf(\"{\");\n  const lastBrace = trimmed.lastIndexOf(\"}\");\n  if (firstBrace >= 0 && lastBrace > firstBrace) {\n    return trimmed.slice(firstBrace, lastBrace + 1);\n  }\n\n  return trimmed;\n}\n\nconst rawOutput = pickAgentOutput($json);\nlet parsed;\nlet parseError = null;\n\ntry {\n  parsed = typeof rawOutput === \"object\" && rawOutput !== null\n    ? rawOutput\n    : JSON.parse(extractJsonText(rawOutput));\n} catch (error) {\n  parseError = error.message;\n  parsed = {\n    reply: typeof rawOutput === \"string\" && rawOutput.trim()\n      ? rawOutput.trim()\n      : \"This question needs to be confirmed with the administrator. You can ask your mentor during the trial period.\",\n    candidate_update: {\n      country: null,\n      age_passed: null,\n      english_passed: null,\n      has_android: null,\n      internet_ok: null,\n      hours_ok: null,\n      us_time_ok: null,\n      commission_ok: null,\n      interested: null,\n      screening_step: currentCandidate.screening_step || \"not_started\",\n      screening_status: \"unknown\",\n      rejection_reason: null\n    }\n  };\n}\n\nconst update = parsed.candidate_update || {};\n\nfunction boolToTinyInt(value) {\n  if (value === true) return 1;\n  if (value === false) return 0;\n  return null;\n}\n\nconst allowedStatuses = [\"not_started\", \"in_progress\", \"passed\", \"rejected\", \"unknown\"];\nconst allowedSteps = [\n  \"not_started\",\n  \"experience\",\n  \"country\",\n  \"age\",\n  \"english\",\n  \"android\",\n  \"internet\",\n  \"hours\",\n  \"us_time\",\n  \"commission\",\n  \"interest\",\n  \"download_sent\",\n  \"rejected\"\n];\n\nconst screeningStatus = allowedStatuses.includes(update.screening_status)\n  ? update.screening_status\n  : \"unknown\";\n\nconst screeningStep = allowedSteps.includes(update.screening_step)\n  ? update.screening_step\n  : (currentCandidate.screening_step || \"not_started\");\n\nreturn [{\n  json: {\n    telegram_user_id: input.telegram_user_id,\n    telegram_chat_id: input.telegram_chat_id,\n    message_id: input.message_id,\n    reply: typeof parsed.reply === \"string\" && parsed.reply.trim()\n      ? parsed.reply\n      : \"This question needs to be confirmed with the administrator. You can ask your mentor during the trial period.\",\n\n    country: update.country || null,\n    age_passed: boolToTinyInt(update.age_passed),\n    english_passed: boolToTinyInt(update.english_passed),\n    has_android: boolToTinyInt(update.has_android),\n    internet_ok: boolToTinyInt(update.internet_ok),\n    hours_ok: boolToTinyInt(update.hours_ok),\n    us_time_ok: boolToTinyInt(update.us_time_ok),\n    commission_ok: boolToTinyInt(update.commission_ok),\n    interested: boolToTinyInt(update.interested),\n    screening_step: screeningStep,\n    screening_status: screeningStatus,\n    rejection_reason: update.rejection_reason || null,\n\n    agent_raw_output: JSON.stringify(parsed),\n    parse_error: parseError\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ],
+      "id": "eb7170a0-8d14-4d28-8882-285f9cb25c72",
+      "name": "Parse Agent JSON"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE n8n_keep_hiring_candidates\nSET\n  country = CASE WHEN $1 IS NULL OR $1 = '' THEN country ELSE $1 END,\n  age_passed = CASE WHEN $2 IS NULL OR CAST($2 AS CHAR) = '' THEN age_passed ELSE $2 END,\n  english_passed = CASE WHEN $3 IS NULL OR CAST($3 AS CHAR) = '' THEN english_passed ELSE $3 END,\n  has_android = CASE WHEN $4 IS NULL OR CAST($4 AS CHAR) = '' THEN has_android ELSE $4 END,\n  internet_ok = CASE WHEN $5 IS NULL OR CAST($5 AS CHAR) = '' THEN internet_ok ELSE $5 END,\n  hours_ok = CASE WHEN $6 IS NULL OR CAST($6 AS CHAR) = '' THEN hours_ok ELSE $6 END,\n  us_time_ok = CASE WHEN $7 IS NULL OR CAST($7 AS CHAR) = '' THEN us_time_ok ELSE $7 END,\n  commission_ok = CASE WHEN $8 IS NULL OR CAST($8 AS CHAR) = '' THEN commission_ok ELSE $8 END,\n  interested = CASE WHEN $9 IS NULL OR CAST($9 AS CHAR) = '' THEN interested ELSE $9 END,\n\n  screening_step = CASE WHEN $10 IS NULL OR $10 = '' THEN screening_step ELSE $10 END,\n  screening_status = CASE\n    WHEN $11 IS NULL OR $11 = '' THEN screening_status\n    WHEN screening_status = 'passed' AND $11 IN ('in_progress', 'unknown', 'not_started') THEN screening_status\n    WHEN screening_status = 'rejected' AND $11 IN ('unknown', 'not_started') THEN screening_status\n    ELSE $11\n  END,\n  rejection_reason = CASE\n    WHEN $11 IN ('passed', 'in_progress') THEN NULL\n    WHEN $11 = 'rejected' AND $12 IS NOT NULL AND $12 <> '' THEN $12\n    WHEN $12 IS NOT NULL AND $12 <> '' THEN $12\n    ELSE rejection_reason\n  END,\n\n  passed_at = CASE\n    WHEN $11 = 'passed' AND passed_at IS NULL THEN NOW()\n    ELSE passed_at\n  END,\n  rejected_at = CASE\n    WHEN $11 = 'rejected' AND rejected_at IS NULL THEN NOW()\n    ELSE rejected_at\n  END,\n  download_link_sent_at = CASE\n    WHEN $10 = 'download_sent' AND download_link_sent_at IS NULL THEN NOW()\n    ELSE download_link_sent_at\n  END,\n\n  last_agent_reply = $13,\n  agent_raw_output = CASE WHEN $14 IS NULL OR $14 = '' THEN agent_raw_output ELSE $14 END,\n  parse_error = CASE WHEN $15 IS NULL OR $15 = '' THEN NULL ELSE $15 END,\n  updated_at = NOW()\nWHERE telegram_user_id = $16;",
+        "options": {
+          "queryReplacement": "={{ [ $json.country, $json.age_passed, $json.english_passed, $json.has_android, $json.internet_ok, $json.hours_ok, $json.us_time_ok, $json.commission_ok, $json.interested, $json.screening_step, $json.screening_status, $json.rejection_reason, $json.reply, $json.agent_raw_output, $json.parse_error, $json.telegram_user_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        0
+      ],
+      "id": "19c1d53b-a457-4bfe-84fe-63de93981056",
+      "name": "MySQL: Update Candidate Screening",
+      "alwaysOutputData": true,
+      "notesInFlow": true,
+      "notes": "Select your MySQL credential before activating this workflow."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $(\"Parse Agent JSON\").first().json.telegram_chat_id }}",
+        "text": "={{ $(\"Parse Agent JSON\").first().json.reply }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1920,
+        0
+      ],
+      "id": "822a2da7-5c6e-4d55-966f-90573f0341b2",
+      "name": "Send a text message",
+      "webhookId": "e460c4e0-263a-4f6a-a9bf-a38682465772",
+      "credentials": {
+        "telegramApi": {
+          "id": "r3GqgBVazNlMfA83",
+          "name": "keephring_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1040,
+        240
+      ],
+      "id": "8a59b7f0-ccb9-4ad6-894d-b68c8c4d63a3",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "yQTViveYBMKnGlxS",
+          "name": "keep-hring-bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.telegram_chat_id }}",
+        "contextWindowLength": 50
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1200,
+        240
+      ],
+      "id": "c867ac4d-69e1-4cd6-809b-334dc417331b",
+      "name": "Simple Memory"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Telegram Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Telegram Input": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Upsert Candidate Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Upsert Candidate Profile": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Get Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Get Candidate": {
+      "main": [
+        [
+          {
+            "node": "Build Agent Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Agent Input": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Agent JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Agent JSON": {
+      "main": [
+        [
+          {
+            "node": "MySQL: Update Candidate Screening",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL: Update Candidate Screening": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "0021707d-74ca-455d-87b2-9e6d3bf96a2e",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "61e5fd485fb2177ba465b2aed3731b3244f55da00071a1a7b9a33a7dddb91ef1"
+  },
+  "id": "V0zeeKihq89dqDXz",
+  "tags": []
+}
